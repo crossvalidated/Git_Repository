@@ -1,0 +1,162 @@
+---
+title: "Practical Machine Learning GitHub"
+author: "J. Wulff"
+date: "Sunday, May 17, 2015"
+output: html_document
+---
+
+Practical Machine Learning project
+==================================
+
+Load the data and remove missing.
+```{r}
+
+setwd("C:/Users/Jesper/Dropbox/Coursera - EdX/Practical Machine Learning/Project/Data")
+training_before_na <- read.csv("pml-training.csv")
+testing_before_na <- read.csv("pml-testing.csv")
+
+training_final <- training_before_na
+training_final[training_final == ""] <- NA
+training_final <- training_final[,colSums(is.na(training_final)) == 0]
+rm(training_before_na)
+
+testing_final <- testing_before_na
+testing_final[testing_final==""] <- NA
+testing_final <- testing_final[,colSums(is.na(testing_final)) == 0]
+rm(testing_before_na)
+
+#Remove some unnessecary variables
+library(dplyr)
+training_final <- select(training_final, -X, -user_name, -raw_timestamp_part_1, -raw_timestamp_part_2, -cvtd_timestamp)
+names(training_final)
+dim(training_final)
+testing_final <- select(testing_final, -X, -user_name, -raw_timestamp_part_1, -raw_timestamp_part_2, -cvtd_timestamp)
+
+
+```
+
+This leaves us with 55 variables. 
+
+
+Split the data into training and testing data
+```{r}
+library(caret)
+set.seed(333)
+inTrain <- createDataPartition(y=training_final$classe, p=.75, list=F)
+training <- training_final[inTrain,]
+testing <- training_final[-inTrain,]
+dim(training); dim(testing)
+
+```
+
+Let's look at our variables
+
+```{r}
+names(training)
+table(training$classe)
+table(training$classe)/dim(training)[1]
+plot(training$classe)
+summary(training)
+#lapply(training, class)
+
+#Identify variables with very little variability
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+nsv 
+#Looks fine
+```
+
+Above we could see from the distribution that guessing on the mode would give us an accuracy of 28%.
+Thus, let's start with that as our baseline prediction to beat.
+
+Analysis
+--------
+
+We now try to use a very simple model to beat the baseline of guessing on the mode.
+
+The choice falls upon Linear Discriminant Analysis.
+
+```{r}
+#Linear disc
+modlda = train(classe ~ ., data=training, method="lda")
+#predict
+plda = predict(modlda, testing)
+confusionMatrix(plda, testing$classe)
+#let this be the baseline prediction accucary to beat: .8497
+```
+
+The new accuracy to beat is 85%.
+
+Let's try a normal tree followed by random forest to up the prediction.
+
+```{r}
+modFit <- train(classe ~., method="rpart", data=training)
+print(modFit$finalModel)
+prrpart <- predict(modFit, testing)
+confusionMatrix(prrpart, testing$classe)
+
+#Pretty poor performance - much worse than the lda.
+#Still, let's look at it
+
+library(rattle)
+fancyRpartPlot(modFit$finalModel)
+#The roll_belt and pitch_forearm variables seem to be important classifying variables.
+```
+
+
+The above tree was interesting but had horrible prediction accuracy.
+Let's improve on that using a random forest.
+However, the algororithm returns a vector of 2.2 gb when run on the full training set. Way too much for my laptop.
+Thus, I take a smaller random sample from the training set and run the model on that.
+
+```{r}
+subset_train=sample_n(training,3000)
+
+#modfit <- train(classe ~ .,  method="rf", data=subset_train, importance=TRUE, proximity=TRUE,do.trace=TRUE)
+#The commented out syntax is extremely slow. Looked up a few fixes online. Alternative syntax below
+require(randomForest)
+modfit <- randomForest(y=subset_train$classe, x=subset_train[,-55], ntree=5000)
+
+prfr <- predict(modfit, testing)
+confusionMatrix(prfr, testing$classe)
+#Accucary boosted to 98%! A huge improvement over lda. 
+modfit
+
+#Let's look at which variables are important
+varImpPlot(modfit)
+
+#It is quite unlikely that the full sample will improve much on that.
+#The model prediction accuracy is satisfactory, so we choose this model.
+```
+
+Finally, to predict on the testset for the online submission
+This was a little challenging due to type mismatches
+```{r}
+#Let's predict the variable in the test set for online submission
+#str(subset_train)
+#str(testing)
+#str(testing_final)
+#lapply(training, class)
+#lapply(testing_final, class)
+
+#There is a type mismatch between the training and testing set
+#fix it by changing types
+
+testing_final$magnet_forearm_y <- as.numeric(testing_final$magnet_forearm_y)
+testing_final$magnet_forearm_z <- as.numeric(testing_final$magnet_forearm_z)
+testing_final$magnet_dumbbell_z <- as.numeric(testing_final$magnet_dumbbell_z)
+
+levels(testing_final$new_window) <- levels(subset_train$new_window)
+prfr <- predict(modfit, newdata = testing_final)
+
+answers = c("B", "A", "B", "A", "A", "E", "D", "B", "A", "A", "B", "C", "B", "A", "E", "E", "A", "B", "B", "B")
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+```
